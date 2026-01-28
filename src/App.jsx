@@ -12,6 +12,7 @@ import Cart from './pages/Cart';
 import Checkout from './pages/Checkout';
 import ProductDetail from './pages/ProductDetail';
 import AdminDashboard from './pages/AdminDashboard';
+import DeliveryDashboard from './pages/DeliveryDashboard';
 import ResetPassword from './pages/ResetPassword';
 import Sidebar from './components/Sidebar';
 import Orders from './pages/Orders';
@@ -23,6 +24,7 @@ export default function App() {
     const [currentView, setCurrentView] = useState(() => localStorage.getItem('solara_last_view') || 'home');
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [isAdminMode, setIsAdminMode] = useState(false);
+    const [isDeliveryMode, setIsDeliveryMode] = useState(false);
     const [products, setProducts] = useState([]);
     const [session, setSession] = useState(null);
     const [isResetting, setIsResetting] = useState(false);
@@ -42,6 +44,7 @@ export default function App() {
         // 1. Obtener sesión inicial
         supabase.auth.getSession().then(({ data: { session } }) => {
             setSession(session);
+            checkDelivery(session);
             checkAdmin(session);
             if (session) fetchFavorites(session.user.id);
         });
@@ -55,9 +58,10 @@ export default function App() {
                 setSession(null);
                 setFavorites([]);
                 setIsAdminMode(false);
+                setIsDeliveryMode(false);
 
                 // Si el usuario está en una vista privada, redirigir al Home
-                const privateViews = ['profile', 'admin_dashboard', 'orders', 'checkout'];
+                const privateViews = ['profile', 'admin_dashboard', 'delivery_dashboard', 'orders', 'checkout'];
                 if (privateViews.includes(currentView)) {
                     setCurrentView('home');
                 }
@@ -75,6 +79,7 @@ export default function App() {
                     timer: 2000
                 });
             } else {
+                checkDelivery(newSession);
                 setSession(newSession);
                 checkAdmin(newSession);
                 if (newSession) fetchFavorites(newSession.user.id);
@@ -87,6 +92,15 @@ export default function App() {
     const checkAdmin = (session) => {
         if (session?.user?.email === 'solaraproyecto@hotmail.com') setIsAdminMode(true);
         else setIsAdminMode(false);
+    };
+
+    const checkDelivery = (session) => {
+        if (session?.user?.email === 'delivery@solara.com') {
+            setIsDeliveryMode(true);
+            setCurrentView('delivery_dashboard');
+        } else {
+            setIsDeliveryMode(false);
+        }
     };
 
     async function fetchFavorites(userId) {
@@ -191,6 +205,7 @@ export default function App() {
 
     const renderView = () => {
         if (isResetting) return <ResetPassword onComplete={() => setIsResetting(false)} />;
+        if (currentView === 'delivery_dashboard' && isDeliveryMode) return <DeliveryDashboard onLogout={() => supabase.auth.signOut()} />;
         if (currentView === 'admin_dashboard' && isAdminMode) return <AdminDashboard onSwitchToClient={() => setCurrentView('home')} products={products} onProductAdded={fetchProducts} />;
 
         switch (currentView) {
@@ -263,7 +278,7 @@ export default function App() {
     return (
         <CurrencyProvider>
             <div className="bg-white min-h-screen font-sans text-gray-900 flex relative overflow-hidden">
-                {currentView !== 'admin_dashboard' && currentView !== 'checkout' && !isResetting && (
+                {currentView !== 'admin_dashboard' && currentView !== 'delivery_dashboard' && currentView !== 'checkout' && !isResetting && (
                     <Sidebar
                         currentView={currentView}
                         setCurrentView={setCurrentView}
@@ -272,12 +287,12 @@ export default function App() {
                 )}
 
                 <main className="flex-1 w-full relative h-screen overflow-y-auto">
-                    <div className={`${currentView !== 'admin_dashboard' && currentView !== 'checkout' && !isResetting ? 'pb-24 md:pb-0' : ''} min-h-full`}>
+                    <div className={`${currentView !== 'admin_dashboard' && currentView !== 'delivery_dashboard' && currentView !== 'checkout' && !isResetting ? 'pb-24 md:pb-0' : ''} min-h-full`}>
                         {renderView()}
                     </div>
                 </main>
 
-                {currentView !== 'admin_dashboard' && currentView !== 'checkout' && !isResetting && (
+                {currentView !== 'admin_dashboard' && currentView !== 'delivery_dashboard' && currentView !== 'checkout' && !isResetting && (
                     <nav className="md:hidden fixed bottom-6 left-1/2 -translate-x-1/2 w-[calc(100%-3rem)] max-w-sm bg-gray-900/90 backdrop-blur-md text-white px-4 py-4 rounded-full shadow-2xl flex justify-between items-center z-40">
                         {[
                             { id: 'home', icon: HomeIcon },

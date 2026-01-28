@@ -17,6 +17,8 @@ export default function Checkout({ cart, onBack, session, clearCart }) {
 
     // Estados de selección
     const [userAddresses, setUserAddresses] = useState([]);
+    const [userPhone, setUserPhone] = useState('');
+    const [userFullName, setUserFullName] = useState('');
     const [selectedShippingAddr, setSelectedShippingAddr] = useState('');
     const [selectedBillingAddr, setSelectedBillingAddr] = useState('');
     const [paymentMethods, setPaymentMethods] = useState([]);
@@ -31,19 +33,25 @@ export default function Checkout({ cart, onBack, session, clearCart }) {
         async function loadCheckoutData() {
             if (!session) return;
 
-            // 1. Cargar Direcciones del Perfil del Usuario
+            // 1. Cargar Direcciones y Datos del Perfil del Usuario
             const { data: profile } = await supabase
                 .from('profiles')
-                .select('address')
+                .select('address, phone, full_name')
                 .eq('id', session.user.id)
                 .single();
 
-            if (profile?.address) {
-                const list = profile.address.split('|').filter(a => a.trim() !== '');
-                setUserAddresses(list);
-                if (list.length > 0) {
-                    setSelectedShippingAddr(list[0]);
-                    setSelectedBillingAddr(list[0]);
+            if (profile) {
+                // Guardar Teléfono y Nombre para el pedido
+                if (profile.phone) setUserPhone(profile.phone);
+                if (profile.full_name) setUserFullName(profile.full_name);
+
+                if (profile.address) {
+                    const list = profile.address.split('|').filter(a => a.trim() !== '');
+                    setUserAddresses(list);
+                    if (list.length > 0) {
+                        setSelectedShippingAddr(list[0]);
+                        setSelectedBillingAddr(list[0]);
+                    }
                 }
             }
 
@@ -131,7 +139,9 @@ export default function Checkout({ cart, onBack, session, clearCart }) {
                     billing: selectedBillingAddr,
                     pickup_location: selectedStoreLocation,
                     payment_method: pay?.type,
-                    proof: paymentProofUrl
+                    proof: paymentProofUrl,
+                    phone: userPhone || 'No registrado',
+                    full_name: userFullName || nombreCliente
                 }
             }]);
 

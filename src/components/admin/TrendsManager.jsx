@@ -1,8 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../../lib/supabaseClient';
-import { DragDropContext, Droppable, Draggable } from '@hello-pangea/dnd';
-import { GripVertical, X, Plus, Star, ImageOff } from 'lucide-react'; // Agregamos ImageOff
-import Swal from 'sweetalert2';
+import { Star, ImageOff, Filter, PieChart, Calendar, AlertCircle } from 'lucide-react';
 
 // --- COMPONENTE AUXILIAR PARA MINIATURAS (Igual que en AdminDashboard) ---
 const ProductThumbnail = ({ url, alt }) => {
@@ -27,103 +25,211 @@ const ProductThumbnail = ({ url, alt }) => {
     );
 };
 
-export default function TrendsManager({ products, onUpdate }) {
-    const [trendingList, setTrendingList] = useState([]);
+export default function TrendsManager({ products }) {
+    const [orders, setOrders] = useState([]);
+    const [timeFilter, setTimeFilter] = useState('all'); // all, year, month, day
 
     useEffect(() => {
-        // Ordenamos por la columna trending_order
-        const filtered = products
-            .filter(p => p.is_featured)
-            .sort((a, b) => (a.trending_order || 999) - (b.trending_order || 999));
-        setTrendingList(filtered);
-    }, [products]);
+        const fetchOrders = async () => {
+            const { data } = await supabase
+                .from('orders')
+                .select('items, created_at');
+            
+            if (data) {
+                setOrders(data);
+            }
+        };
+        fetchOrders();
+    }, []);
 
-    const handleOnDragEnd = async (result) => {
-        if (!result.destination) return;
-
-        const items = Array.from(trendingList);
-        const [reorderedItem] = items.splice(result.source.index, 1);
-        items.splice(result.destination.index, 0, reorderedItem);
-
-        setTrendingList(items); // Actualización visual inmediata
-
-        // Actualización en BD
-        const updates = items.map((item, index) => ({
-            id: item.id,
-            trending_order: index,
-            is_featured: true,
-            name: item.name, // Supabase a veces pide campos required en upsert
-            price: item.price
-        }));
-
-        const { error } = await supabase.from('products').upsert(updates, { onConflict: 'id' });
-
-        if (!error) {
-            onUpdate(); // Refrescar datos globales
-            Swal.fire({ icon: 'success', title: 'Orden guardado', toast: true, position: 'bottom-end', showConfirmButton: false, timer: 1000 });
-        }
+    // Helper para filtrar por fecha
+    const isDateMatch = (dateStr, filter) => {
+        if (filter === 'all') return true;
+        const d = new Date(dateStr);
+        const now = new Date();
+        if (filter === 'year') return d.getFullYear() === now.getFullYear();
+        if (filter === 'month') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        if (filter === 'day') return d.getDate() === now.getDate() && d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+        return true;
     };
 
-    const toggleFeatured = async (product) => {
-        const newVal = !product.is_featured;
-        await supabase.from('products').update({ is_featured: newVal }).eq('id', product.id);
-        onUpdate();
+    const bestSellers = useMemo(() => {
+        const salesCount = {};
+
+        orders.forEach(order => {
+            if (order.items && Array.isArray(order.items)) {
+                order.items.forEach(item => {
+                    const id = item.id || item.product_id;
+                    const qty = item.quantity || 0;
+                    if (id) {
+                        salesCount[id] = (salesCount[id] || 0) + qty;
+                    }
+                });
+            }
+        });
+
+        const sortedIds = Object.keys(salesCount).sort((a, b) => salesCount[b] - salesCount[a]);
+        
+        return sortedIds.map(id => {
+            const product = products.find(p => p.id.toString() === id.toString());
+            return product ? { ...product, sold: salesCount[id] } : null;
+        }).filter(item => item !== null && item.sold > 0);
+
+    }, [orders, products]);
+
+    const chartData = useMemo(() => {
+        const salesCount = {};
+        let totalSales = 0;
+
+        orders.filter(o => isDateMatch(o.created_at, timeFilter)).forEach(order => {
+            if (order.items && Array.isArray(order.items)) {
+                order.items.forEach(item => {
+                    const id = item.id || item.product_id;
+                    const qty = item.quantity || 0;
+                    if (id) {
+                        salesCount[id] = (salesCount[id] || 0) + qty;
+                        totalSales += qty;
+                    }
+                });
+            }
+        });
+
+        const sortedIds = Object.keys(salesCount).sort((a, b) => salesCount[b] - salesCount[a]);
+        const top5Ids = sortedIds.slice(0, 5);
+        
+        let data = top5Ids.map(id => {
+            const product = products.find(p => p.id.toString() === id.toString());
+            return {
+                name: product ? product.name : 'Desconocido',
+                value: salesCount[id],
+                percentage: totalSales > 0 ? (salesCount[id] / totalSales) * 100 : 0,
+                color: ''
+            };
+        });
+
+        const othersCount = sortedIds.slice(5).reduce((acc, id) => acc + salesCount[id], 0);
+        if (othersCount > 0) {
+            data.push({
+                name: 'Otros',
+                value: othersCount,
+                percentage: totalSales > 0 ? (othersCount / totalSales) * 100 : 0,
+                color: '#94a3b8'
+            });
+        }
+
+        // Colors matching the requested visual style (Blue, Green, Orange, Red, Purple, etc.)
+        const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#a855f7', '#ec4899', '#6366f1'];
+        data = data.map((d, i) => ({ ...d, color: d.color || colors[i % colors.length] }));
+
+        return data;
+    }, [orders, products, timeFilter]);
+
+
+    const getConicGradient = () => {
+        if (chartData.length === 0) return 'conic-gradient(#f3f4f6 0% 100%)';
+        
+        let gradientStr = '';
+        let currentDeg = 0;
+        
+        chartData.forEach((slice, i) => {
+            const sliceDeg = (slice.percentage / 100) * 360;
+            const endDeg = currentDeg + sliceDeg;
+            gradientStr += `${slice.color} ${currentDeg}deg ${endDeg}deg${i < chartData.length - 1 ? ', ' : ''}`;
+            currentDeg = endDeg; 
+        });
+        
+        return `conic-gradient(${gradientStr})`;
     };
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 animate-fade-in">
-            {/* ZONA DE ARRASTRAR */}
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100">
-                <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                    <Star className="text-yellow-400 fill-yellow-400" size={20} /> En Portada (Ordenable)
+            {/* LISTA AUTOMÁTICA EN PORTADA (MÁS VENDIDOS) */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 h-fit">
+                <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2">
+                    <Star className="text-yellow-400 fill-yellow-400" size={20} /> 
+                    <span>En Portada (Más Vendidos)</span>
                 </h3>
-                <DragDropContext onDragEnd={handleOnDragEnd}>
-                    <Droppable droppableId="trends">
-                        {(provided) => (
-                            <div {...provided.droppableProps} ref={provided.innerRef} className="space-y-2">
-                                {trendingList.map((product, index) => (
-                                    <Draggable key={product.id} draggableId={product.id.toString()} index={index}>
-                                        {(provided, snapshot) => (
-                                            <div
-                                                ref={provided.innerRef}
-                                                {...provided.draggableProps}
-                                                {...provided.dragHandleProps}
-                                                className={`flex items-center gap-4 p-3 rounded-2xl border transition-all ${snapshot.isDragging ? 'bg-rose-50 border-rose-500 shadow-lg scale-105 z-50' : 'bg-white border-gray-100 hover:border-rose-200'}`}
-                                            >
-                                                <div className="text-gray-300 cursor-grab active:cursor-grabbing"><GripVertical size={20} /></div>
-                                                <span className="font-bold text-rose-500 w-6">#{index + 1}</span>
+                
+                <div className="space-y-2 max-h-[500px] overflow-y-auto pr-2 custom-scrollbar">
+                    {bestSellers.length > 0 ? (
+                        bestSellers.map((product, index) => (
+                            <div key={product.id} className="flex items-center gap-4 p-3 rounded-2xl border border-gray-100 bg-white hover:border-rose-200 transition-colors">
+                                <span className={`font-black text-lg w-8 text-center ${index < 3 ? 'text-rose-500' : 'text-gray-400'}`}>
+                                    #{index + 1}
+                                </span>
 
-                                                {/* IMAGEN SEGURA */}
-                                                <ProductThumbnail url={product.images?.[0]} alt={product.name} />
+                                <ProductThumbnail url={product.images?.[0]} alt={product.name} />
 
-                                                <p className="font-bold text-gray-800 flex-1 line-clamp-1">{product.name}</p>
-                                                <button onClick={() => toggleFeatured(product)} className="p-2 bg-red-50 text-red-500 rounded-lg hover:bg-red-100"><X size={16} /></button>
-                                            </div>
-                                        )}
-                                    </Draggable>
-                                ))}
-                                {provided.placeholder}
+                                <div className="flex-1">
+                                    <p className="font-bold text-gray-800 line-clamp-1">{product.name}</p>
+                                    <p className="text-xs text-rose-400 font-medium">{product.sold} vendidos</p>
+                                </div>
                             </div>
-                        )}
-                    </Droppable>
-                </DragDropContext>
-                {trendingList.length === 0 && <p className="text-center text-gray-400 py-10 border-2 border-dashed border-gray-100 rounded-xl">Arrastra productos aquí</p>}
+                        ))
+                    ) : (
+                        <div className="flex flex-col items-center justify-center py-10 text-gray-400 border-2 border-dashed border-gray-100 rounded-2xl">
+                            <AlertCircle className="mb-2 opacity-50" size={24} />
+                            <p>No se han vendido productos</p>
+                            <p className="text-sm opacity-60">Las ventas aparecerán aquí automáticamente</p>
+                        </div>
+                    )}
+                </div>
             </div>
 
-            {/* LISTA PARA AGREGAR */}
-            <div className="bg-gray-50 p-6 rounded-3xl border border-gray-200 h-fit max-h-[600px] overflow-y-auto">
-                <h3 className="font-bold text-gray-800 mb-4">Inventario Disponible</h3>
-                <div className="space-y-2">
-                    {products.filter(p => !p.is_featured).map(product => (
-                        <div key={product.id} className="flex items-center gap-3 p-3 bg-white rounded-xl opacity-70 hover:opacity-100 transition-opacity shadow-sm">
-
-                            {/* IMAGEN SEGURA */}
-                            <ProductThumbnail url={product.images?.[0]} alt={product.name} />
-
-                            <p className="text-sm font-medium text-gray-700 flex-1">{product.name}</p>
-                            <button onClick={() => toggleFeatured(product)} className="p-2 bg-green-50 text-green-600 rounded-lg hover:bg-green-100"><Plus size={16} /></button>
+            {/* GRÁFICO DE VENTAS */}
+            <div className="bg-white p-6 rounded-3xl shadow-sm border border-gray-100 flex flex-col">
+                <div className="flex justify-between items-start mb-6">
+                    <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                        <PieChart className="text-rose-500" size={20} /> Distribución de Ventas
+                    </h3>
+                    
+                    {/* Filtros */}
+                    <div className="relative">
+                        <div className="flex items-center gap-2 bg-gray-50 px-3 py-1.5 rounded-xl border border-gray-100">
+                            <Calendar size={14} className="text-gray-400" />
+                            <select 
+                                value={timeFilter} 
+                                onChange={(e) => setTimeFilter(e.target.value)}
+                                className="bg-transparent text-sm font-medium text-gray-600 outline-none cursor-pointer appearance-none pr-4"
+                            >
+                                <option value="all">Todo el tiempo</option>
+                                <option value="year">Este Año</option>
+                                <option value="month">Este Mes</option>
+                                <option value="day">Hoy</option>
+                            </select>
                         </div>
-                    ))}
+                    </div>
+                </div>
+
+                <div className="flex-1 flex flex-col items-center justify-center min-h-[300px]">
+                    {chartData.length > 0 ? (
+                        <div className="flex flex-col md:flex-row items-center gap-8 w-full px-4">
+                            {/* PIE CHART VISUAL */}
+                            <div 
+                                className="w-56 h-56 rounded-full shadow-lg relative flex-shrink-0 border-4 border-white"
+                                style={{ background: getConicGradient() }}
+                            >
+                                {/* Full Pie Chart - No center hole */}
+                            </div>
+
+                            {/* LEYENDA */}
+                            <div className="flex-1 w-full space-y-3">
+                                {chartData.map((d, i) => (
+                                    <div key={i} className="flex items-center gap-3 text-sm">
+                                        <div className="w-4 h-4 rounded-full flex-shrink-0" style={{ backgroundColor: d.color }}></div>
+                                        <span className="flex-1 text-gray-700 truncate font-medium">
+                                            {d.name} <span className="text-gray-500 font-normal">[{Math.round(d.percentage)}%]</span>
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="text-center text-gray-400">
+                            <PieChart size={48} className="mx-auto mb-3 opacity-20" />
+                            <p>No hay datos para este periodo</p>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>
